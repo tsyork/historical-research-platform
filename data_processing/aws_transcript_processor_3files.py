@@ -2,7 +2,8 @@
 """
 AWS Fleet Transcript Processor
 Processes existing Google Drive transcripts to Qdrant Cloud
-FULL VERSION: Processes all available episodes
+Optimized for t3.large spot instances
+MODIFIED: Limited to 3 files for testing
 """
 
 import os
@@ -54,11 +55,11 @@ class AWSTranscriptProcessor:
         # Google credentials (should be in AMI)
         self.credentials_path = '/home/ubuntu/credentials.json'  # Standard AMI location
 
-        # Processing settings optimized for production
-        self.chunk_size = 1000
-        self.chunk_overlap = 200
-        self.batch_size = 10  # Increased for better performance
-        self.api_delay = 0.5  # Reduced delay for faster processing
+        # Processing settings optimized for AWS - CONSERVATIVE
+        self.chunk_size = 800  # Smaller chunks
+        self.chunk_overlap = 150
+        self.batch_size = 3  # Much smaller batches
+        self.api_delay = 2.0  # Longer delays between API calls
         self.request_timeout = 60  # Timeout for requests
 
         # Revolution mapping
@@ -127,10 +128,10 @@ class AWSTranscriptProcessor:
             self.qdrant_client = QdrantClient(
                 url=self.qdrant_url,
                 api_key=self.qdrant_api_key,
-                timeout=60
+                timeout=60  # Conservative timeout
             )
 
-            # Test connection
+            # Test connection with timeout
             collections = self.qdrant_client.get_collections()
             collection_names = [c.name for c in collections.collections]
 
@@ -256,15 +257,15 @@ class AWSTranscriptProcessor:
         # Multiple chunks with overlap - FIXED LOGIC
         start = 0
         chunk_index = 0
-        max_chunks = 100  # Safety limit for production
+        max_chunks = 50  # Safety limit to prevent infinite loops
 
         while start < text_length and chunk_index < max_chunks:
             end = min(start + self.chunk_size, text_length)
 
             # Try to break at sentence boundary if not at end
             if end < text_length:
-                # Look for sentence endings in the last 200 characters
-                search_start = max(end - 200, start + self.chunk_size // 2)
+                # Look for sentence endings in the last 150 characters
+                search_start = max(end - 150, start + self.chunk_size // 2)
                 best_break = end
 
                 for delimiter in ['. ', '! ', '? ', '\n\n']:
@@ -307,7 +308,7 @@ class AWSTranscriptProcessor:
         return chunks
 
     def create_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """Create embeddings for a batch of texts"""
+        """Create embeddings for a batch of texts - CONSERVATIVE"""
 
         logger.info(f"🔄 Creating embeddings for {len(texts)} texts...")
 
@@ -315,13 +316,13 @@ class AWSTranscriptProcessor:
             response = self.openai_client.embeddings.create(
                 model="text-embedding-3-small",
                 input=texts,
-                timeout=30
+                timeout=30  # Conservative timeout
             )
 
             embeddings = [item.embedding for item in response.data]
             logger.info(f"✅ Created {len(embeddings)} embeddings")
 
-            # Delay to respect rate limits
+            # Longer delay to respect rate limits
             time.sleep(self.api_delay)
 
             return embeddings
@@ -365,7 +366,7 @@ class AWSTranscriptProcessor:
                         )
                     )
 
-                # Upload batch to Qdrant
+                # Upload batch to Qdrant with logging
                 logger.info(f"📤 Uploading batch of {len(points)} points to Qdrant...")
                 self.qdrant_client.upsert(
                     collection_name=self.collection_name,
@@ -373,8 +374,8 @@ class AWSTranscriptProcessor:
                 )
                 logger.info(f"✅ Batch uploaded successfully")
 
-                # Delay between batches - reduced for speed
-                time.sleep(self.api_delay)
+                # Longer delay between batches
+                time.sleep(self.api_delay * 3)
 
             logger.info(f"✅ Uploaded {len(chunks)} chunks to Qdrant")
             return True
@@ -384,7 +385,7 @@ class AWSTranscriptProcessor:
             return False
 
     def prepare_episode_metadata(self, metadata: Dict) -> Dict:
-        """Prepare metadata for each chunk - FIXED season handling"""
+        """Prepare metadata for each chunk"""
 
         # Ensure season is an integer for mapping lookup
         season = metadata.get('season', 0)
@@ -416,7 +417,7 @@ class AWSTranscriptProcessor:
             # Processing metadata
             'processed_date': datetime.now().isoformat(),
             'embedding_model': 'text-embedding-3-small',
-            'processing_version': 'v2.1'
+            'processing_version': 'v2.0'
         }
 
     def process_single_episode(self, metadata: Dict) -> bool:
@@ -473,9 +474,9 @@ class AWSTranscriptProcessor:
             return False
 
     def process_all_episodes(self) -> Dict[str, int]:
-        """Process all episodes - PRODUCTION VERSION"""
+        """Process all episodes - LIMITED TO 3 FOR TESTING"""
 
-        logger.info("🚀 Starting FULL episode processing")
+        logger.info("🧪 Starting LIMITED episode processing (3 files max)")
 
         # Get all metadata
         all_metadata = self.get_all_metadata()
@@ -483,7 +484,9 @@ class AWSTranscriptProcessor:
             logger.error("❌ No episodes found to process")
             return {'total': 0, 'success': 0, 'failed': 0}
 
-        logger.info(f"📊 Processing ALL {len(all_metadata)} episodes")
+        # LIMIT TO 3 FILES FOR FULL TEST
+        all_metadata = all_metadata[:3]
+        logger.info(f"🧪 FULL TEST: Processing {len(all_metadata)} files")
 
         # Process each episode
         stats = {'total': len(all_metadata), 'success': 0, 'failed': 0}
@@ -497,28 +500,16 @@ class AWSTranscriptProcessor:
                 else:
                     stats['failed'] += 1
 
-                # Progress update every 10 episodes
-                if (i + 1) % 10 == 0:
-                    elapsed = time.time() - self.start_time
-                    rate = (i + 1) / elapsed * 60  # episodes per minute
-                    remaining = (len(all_metadata) - i - 1) / rate if rate > 0 else 0
-
-                    logger.info(f"📈 Progress: {i + 1}/{len(all_metadata)} episodes")
-                    logger.info(f"⏱️ Rate: {rate:.1f} episodes/min, ETA: {remaining:.1f} min")
-                    logger.info(f"📊 Success: {stats['success']}, Failed: {stats['failed']}")
-                    logger.info(f"🔢 Total chunks created: {self.total_chunks_created}")
-
             except Exception as e:
                 logger.error(f"❌ Unexpected error processing episode {i + 1}: {e}")
                 stats['failed'] += 1
 
         # Final summary
         total_time = time.time() - self.start_time
-        logger.info(f"🎉 Processing complete!")
+        logger.info(f"🎉 LIMITED Processing complete!")
         logger.info(f"⏱️ Total time: {total_time / 60:.1f} minutes")
         logger.info(f"📊 Episodes: {stats['success']}/{stats['total']} successful")
         logger.info(f"🔢 Total chunks created: {self.total_chunks_created}")
-        logger.info(f"📈 Average rate: {stats['total'] / (total_time / 60):.1f} episodes/minute")
 
         return stats
 
@@ -528,8 +519,8 @@ def main():
 
     print("🏛️ AWS Fleet Transcript Processor")
     print("Processing Revolutions Podcast transcripts to Qdrant Cloud")
-    print("🚀 PRODUCTION MODE: Processing ALL available episodes")
-    print("=" * 70)
+    print("🧪 FULL TEST MODE: Processing 3 files")
+    print("=" * 60)
 
     # Environment check
     required_env = [
@@ -547,7 +538,7 @@ def main():
         # Initialize processor
         processor = AWSTranscriptProcessor()
 
-        # Process all episodes
+        # Process limited episodes
         stats = processor.process_all_episodes()
 
         # Final results
@@ -558,14 +549,9 @@ def main():
         print(f"Total chunks uploaded: {processor.total_chunks_created}")
 
         if stats['success'] > 0:
-            print(f"\n✅ SUCCESS! Your Qdrant Cloud collection now contains searchable historical data!")
-            print(f"🌐 Ready to test advanced queries on your platform:")
-            print(f"https://historical-research-platform-320103070676.us-central1.run.app")
-
-            # Estimate collection size
-            avg_chunks = processor.total_chunks_created / stats['success'] if stats['success'] > 0 else 0
-            print(f"📊 Collection now contains ~{processor.total_chunks_created:,} searchable text chunks")
-            print(f"📈 Average {avg_chunks:.1f} chunks per episode")
+            print(f"\n✅ SUCCESS! 3-file test completed successfully!")
+            print(f"🔢 Added {processor.total_chunks_created} new chunks to Qdrant Cloud")
+            print(f"🌐 Ready to test queries on your platform")
 
     except Exception as e:
         print(f"❌ Processing failed: {e}")

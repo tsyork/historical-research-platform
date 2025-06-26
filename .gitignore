@@ -41,3 +41,7 @@ logs/
 *~
 .#*
 *.jar
+
+credentials.json
+*.pem
+spot-fleet-config*.json
