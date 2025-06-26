@@ -1,0 +1,4 @@
+.env
+deployment/aws/config/*.json
+deployment/aws/config/*.pem
+deployment/aws/config/*.json
