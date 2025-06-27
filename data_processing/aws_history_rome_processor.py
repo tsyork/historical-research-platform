@@ -60,20 +60,6 @@ class AWSHistoryRomeProcessor:
         self.api_delay = 0.1  # Small delay between API calls
         self.batch_size = 50  # Qdrant upload batch size
 
-        # History of Rome specific mappings
-        self.period_mapping = {
-            # Early periods (approximate episode ranges)
-            range(1, 15): "The Kings (753-509 BC)",
-            range(15, 25): "Early Republic (509-264 BC)",
-            range(25, 35): "Punic Wars (264-146 BC)",
-            range(35, 50): "Late Republic Crisis (133-49 BC)",
-            range(50, 70): "Caesar and Civil Wars (49-31 BC)",
-            range(70, 100): "Early Empire (31 BC-96 AD)",
-            range(100, 130): "High Empire (96-235 AD)",
-            range(130, 160): "Crisis of Third Century (235-284 AD)",
-            range(160, 179): "Late Empire (284-476 AD)"
-        }
-
         # Initialize counters
         self.processed_count = 0
         self.total_chunks_created = 0
@@ -119,12 +105,39 @@ class AWSHistoryRomeProcessor:
     def get_historical_period(self, episode_number: int) -> str:
         """Get historical period based on episode number"""
 
-        for episode_range, period in self.period_mapping.items():
-            if episode_number in episode_range:
-                return period
+        # Handle string episode numbers like "020a", "020b"
+        if isinstance(episode_number, str):
+            try:
+                # Extract just the numeric part
+                import re
+                match = re.match(r'(\d+)', episode_number)
+                if match:
+                    episode_number = int(match.group(1))
+                else:
+                    episode_number = 0
+            except:
+                episode_number = 0
 
-        # Default for episodes outside known ranges
-        if episode_number >= 179:
+        # Use numeric ranges for period mapping
+        if 1 <= episode_number <= 14:
+            return "The Kings (753-509 BC)"
+        elif 15 <= episode_number <= 24:
+            return "Early Republic (509-264 BC)"
+        elif 25 <= episode_number <= 34:
+            return "Punic Wars (264-146 BC)"
+        elif 35 <= episode_number <= 49:
+            return "Late Republic Crisis (133-49 BC)"
+        elif 50 <= episode_number <= 69:
+            return "Caesar and Civil Wars (49-31 BC)"
+        elif 70 <= episode_number <= 99:
+            return "Early Empire (31 BC-96 AD)"
+        elif 100 <= episode_number <= 129:
+            return "High Empire (96-235 AD)"
+        elif 130 <= episode_number <= 159:
+            return "Crisis of Third Century (235-284 AD)"
+        elif 160 <= episode_number <= 179:
+            return "Late Empire (284-476 AD)"
+        elif episode_number >= 180:
             return "Fall of Rome (476-550 AD)"
         else:
             return "Roman History"
@@ -328,17 +341,28 @@ class AWSHistoryRomeProcessor:
     def prepare_episode_metadata(self, metadata: Dict) -> Dict:
         """Prepare metadata for each chunk"""
 
-        episode_number = int(metadata.get('episode_number', 0))
+        episode_number = metadata.get('episode_number', '0')
+
+        # Keep episode_number as string, but extract numeric part for historical period
+        if isinstance(episode_number, str):
+            try:
+                import re
+                match = re.match(r'(\d+)', episode_number)
+                numeric_episode = int(match.group(1)) if match else 0
+            except:
+                numeric_episode = 0
+        else:
+            numeric_episode = int(episode_number) if episode_number else 0
 
         return {
             # Source identification
             'source_type': 'podcast',
             'source_name': 'history_of_rome',
 
-            # Episode details
-            'episode_number': episode_number,
+            # Episode details (keep original format)
+            'episode_number': episode_number,  # Keep as original string like "003a"
             'episode_title': metadata.get('title', 'Unknown'),
-            'historical_period': self.get_historical_period(episode_number),
+            'historical_period': self.get_historical_period(numeric_episode),  # Use numeric part
             'podcast_date': metadata.get('published', ''),
 
             # Processing metadata
@@ -824,6 +848,54 @@ def main():
     args = sys.argv[1:]
 
     # Check for cleanup operations
+    if '--episode' in args:
+        # Find episode number after --episode
+        try:
+            episode_index = args.index('--episode')
+            if episode_index + 1 < len(args):
+                target_episode = args[episode_index + 1]
+                print(f"🎯 SINGLE EPISODE MODE: Processing episode {target_episode}")
+
+                processor = AWSHistoryRomeProcessor()
+
+                # Get all metadata to find the target episode
+                all_metadata = processor.get_all_metadata()
+                target_metadata = None
+
+                for metadata in all_metadata:
+                    if str(metadata.get('episode_number', '')).strip() == target_episode.strip():
+                        target_metadata = metadata
+                        break
+
+                if target_metadata:
+                    print(f"📄 Found: {target_metadata.get('title', 'Unknown Title')}")
+
+                    # Force reprocess for single episode
+                    success = processor.process_single_episode(target_metadata, force_reprocess=True)
+
+                    if success:
+                        print(f"✅ Episode {target_episode} processed successfully!")
+                    else:
+                        print(f"❌ Failed to process episode {target_episode}")
+                else:
+                    print(f"❌ Episode {target_episode} not found in metadata")
+                    print("Available episodes:")
+                    for metadata in all_metadata[:10]:  # Show first 10
+                        ep_num = metadata.get('episode_number', 'unknown')
+                        title = metadata.get('title', 'Unknown')[:50]
+                        print(f"   {ep_num}: {title}")
+                    if len(all_metadata) > 10:
+                        print(f"   ... and {len(all_metadata) - 10} more")
+
+                return
+            else:
+                print("❌ Please specify episode number after --episode")
+                print("   Example: python3 script.py --episode 003a")
+                return
+        except ValueError:
+            print("❌ Invalid --episode usage")
+            return
+
     if '--scan-duplicates' in args:
         print("🔍 SCAN MODE: Looking for duplicate episodes...")
         processor = AWSHistoryRomeProcessor()
@@ -919,6 +991,7 @@ def main():
     else:
         print("📋 NORMAL MODE: Will skip episodes already processed")
         print("\n💡 Available options:")
+        print("   --episode 003a                 : Process single episode")
         print("   --scan-duplicates              : Check for duplicate episodes")
         print("   --clean-duplicates             : Remove duplicate episodes")
         print("   --delete-episodes 001 002      : Delete specific episodes")
