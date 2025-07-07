@@ -17,11 +17,11 @@ echo ""
 # Check required files exist locally
 echo "📋 Checking required files..."
 required_files=(
-    "deployment/aws/config/spot-fleet-config.json"
-    "deployment/aws/config/whisper-transcription-key.pem"
-    "data_processing/aws_transcript_processor.py"
-    "deployment/aws/config/credentials.json"
-    ".env"
+    "config/spot-fleet-config.json"
+    "config/whisper-transcription-key.pem"
+    "../../data_processing/aws_transcript_processor.py"
+    "config/credentials.json"
+    "../../.env"
 )
 
 for file in "${required_files[@]}"; do
@@ -37,7 +37,7 @@ echo ""
 echo "🔧 Step 1: Launching Spot Fleet"
 echo "==============================="
 
-cd deployment/aws/config
+cd config
 FLEET_ID=$(aws ec2 request-spot-fleet --spot-fleet-request-config file://spot-fleet-config.json --query 'SpotFleetRequestId' --output text)
 cd ../../..
 
